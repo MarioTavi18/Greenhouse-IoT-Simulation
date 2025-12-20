@@ -2,7 +2,7 @@ Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
-Run migrations
+Run migrations to setup database (NEVER COMMIT YOUR DB)
 
 ```bash
 python manage.py makemigrations
