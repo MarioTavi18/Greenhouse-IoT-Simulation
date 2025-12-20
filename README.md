@@ -9,10 +9,12 @@ python manage.py makemigrations
 python manage.py migrate
 ```
 
-Start the simulation
+Start the simulation (greenhouse->management->commands)
+
+You can change/add new configurations in the file.
 
 ```bash
-bashpython manage.py run_simulation
+python manage.py run_simulation
 # Cold greenhouse (15°C, needs heating)
 python manage.py run_simulation --config cold_start
 
