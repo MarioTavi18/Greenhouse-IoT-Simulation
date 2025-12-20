@@ -1,0 +1,70 @@
+# -----------------------
+# Python
+# -----------------------
+*.py[cod]
+*$py.class
+*.so
+.Python
+__pycache__/
+*.pyc
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# -----------------------
+# Django
+# -----------------------
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+/media
+/staticfiles
+*.pot
+
+# -----------------------
+# React / Node.js
+# -----------------------
+node_modules/
+build/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# -----------------------
+# IDEs
+# -----------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# -----------------------
+# Testing
+# -----------------------
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# -----------------------
+# Migrations (optional)
+# -----------------------
+# */migrations/*.py
+# !*/migrations/__init__.py
+
+# -----------------------
+# OS
+# -----------------------
+Thumbs.db
+.DS_Store
