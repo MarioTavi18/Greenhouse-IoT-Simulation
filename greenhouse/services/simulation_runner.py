@@ -26,6 +26,35 @@ def apply_equipment_state(new_state: dict):
             defaults={"is_active": bool(new_state.get(eq, False))}
         )
 
+def log_tick(tick, reading, prediction, command):
+    print("\n" + "=" * 100)
+    print(f"TICK {tick}")
+
+    print("READING")
+    print(
+        f"  T={reading.temperature:6.2f} °C | "
+        f"H={reading.humidity:6.2f} % | "
+        f"S={reading.soil_moisture:6.2f} % | "
+        f"L={reading.light_intensity:8.0f} lux | "
+        f"CO2={reading.co2_concentration:6.0f} ppm | "
+        f"W={reading.weather}"
+    )
+
+    if prediction is not None:
+        print("PREDICTION (next tick)")
+        print(
+            f"  T={prediction['temperature']:6.2f} °C | "
+            f"H={prediction['humidity']:6.2f} % | "
+            f"S={prediction['soil_moisture']:6.2f} % | "
+            f"L={prediction['light_intensity']:8.0f} lux | "
+            f"CO2={prediction['co2_concentration']:6.0f} ppm"
+        )
+
+    print("COMMAND ISSUED")
+    active = [k for k, v in command.items() if v]
+    print("  " + (", ".join(active) if active else "None"))
+
+    print("=" * 100)
 
 class SimulationRunner:
     """
@@ -121,17 +150,17 @@ class SimulationRunner:
         equipment_now = get_equipment_state_dict()
         prev_features = {f"prev_{k}": int(bool(equipment_now.get(k, False))) for k in EQUIPMENT}
 
+        prediction_for_log = None
+
         if len(self.last10) < 10:
-            cmd_dict = equipment_now  # keep state during warmup
+            cmd_dict = equipment_now  # warm-up
         else:
-            # Every 10 ticks, run ridge predictor.
-            # Between those calls, reuse the last prediction (stable) or you can still predict every tick.
-            # Here: we predict only when tick%10==0, otherwise reuse last predicted values from last call.
             if self.tick % 10 == 0 or not hasattr(self, "_cached_pred"):
                 last_10_np = np.array(self.last10, dtype=float)  # (10,5)
                 self._cached_pred = self.predictor.predict_next(last_10_np)
 
-            pred = self._cached_pred  # dict of 5 metrics
+            pred = self._cached_pred
+            prediction_for_log = pred
 
             features = {
                 "temperature": pred["temperature"],
@@ -156,3 +185,4 @@ class SimulationRunner:
         )
 
         apply_equipment_state(cmd_dict)
+        log_tick(self.tick, reading, prediction_for_log, cmd_dict)

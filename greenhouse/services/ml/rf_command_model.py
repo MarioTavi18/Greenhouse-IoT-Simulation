@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import joblib
+import pandas as pd
 
 EQUIPMENT = [
     "heater", "ventilation", "irrigation",
@@ -21,11 +22,10 @@ class RFCommandModel:
         self.models = {name: joblib.load(model_dir / f"rf_{name}.joblib") for name in EQUIPMENT}
 
     def decide(self, features: dict) -> dict:
-        """
-        features: dict containing keys in FEATURES
-        returns: dict of {equipment: bool}
-        """
-        X = [[features[k] for k in FEATURES]]  # keep fixed ordering
+        # Build a DataFrame with correct column names and order
+        row = {k: features[k] for k in FEATURES}
+        X = pd.DataFrame([row], columns=FEATURES)
+
         out = {}
         for name, clf in self.models.items():
             out[name] = bool(clf.predict(X)[0])

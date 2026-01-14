@@ -1,5 +1,6 @@
 from django.db import models
 
+
 class GreenhouseReading(models.Model):
     # Timestamp
     timestamp = models.DateTimeField(auto_now_add=True)
@@ -66,15 +67,15 @@ class EquipmentState(models.Model):
         ('dehumidifier', 'Dehumidifier'),
         ('light_blinds', 'Light Blinds'),
     ]
-    
+
     equipment_type = models.CharField(max_length=20, choices=EQUIPMENT_CHOICES, unique=True)
     is_active = models.BooleanField(default=False)
     last_updated = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         verbose_name = 'Equipment State'
         verbose_name_plural = 'Equipment States'
-    
+
     def __str__(self):
         status = "ON" if self.is_active else "OFF"
         return f"{self.get_equipment_type_display()}: {status}"
