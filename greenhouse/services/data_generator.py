@@ -49,7 +49,7 @@ class GreenhouseDataGenerator:
             'temperature': +8.0,      # Adds 8°C to target
         },
         'ventilation': {
-            'temperature': -4.0,      # Reduces target by 4°C
+            'temperature': -8.0,      # Reduces target by 8°C
             'humidity': -15.0,        # Reduces humidity target
             'co2_concentration': -50.0
         },
@@ -58,7 +58,7 @@ class GreenhouseDataGenerator:
             'humidity': +5.0,
         },
         'co2_injector': {
-            'co2_concentration': +400.0  # Target 800ppm
+            'co2_concentration': +300.0  # Target 300ppm
         },
         'lights': {
             'light_intensity': +15000,   # Add artificial light target
@@ -161,7 +161,85 @@ class GreenhouseDataGenerator:
                 'dehumidifier': lambda: random.choice([True, False]),
                 'light_blinds': lambda: random.choice([True, False]),
             }
+        },
+            'night_cold': {
+            'temperature': 14.0,
+            'humidity': 70.0,
+            'soil_moisture': 55.0,
+            'light_intensity': 300.0,
+            'co2_concentration': 420.0,
+            'weather': 'Clear_sky',
+            'equipment': {
+                'heater': False, 'ventilation': False, 'irrigation': False,
+                'co2_injector': False, 'lights': False, 'dehumidifier': False, 'light_blinds': False,
+            }
+        },
+        'heat_stress': {
+            'temperature': 38.0,
+            'humidity': 40.0,
+            'soil_moisture': 45.0,
+            'light_intensity': 60000.0,
+            'co2_concentration': 430.0,
+            'weather': 'Sunny',
+            'equipment': {
+                'heater': False, 'ventilation': False, 'irrigation': False,
+                'co2_injector': False, 'lights': True, 'dehumidifier': False, 'light_blinds': False,
+            }
+        },
+        'mold_risk': {
+        'temperature': 18.0,
+        'humidity': 95.0,
+        'soil_moisture': 70.0,
+        'light_intensity': 4000.0,
+        'co2_concentration': 420.0,
+        'weather': 'Rainy',
+        'equipment': {
+            'heater': False, 'ventilation': False, 'irrigation': True,
+            'co2_injector': False, 'lights': False, 'dehumidifier': False, 'light_blinds': False,
+            }
+        },
+        'drought': {
+        'temperature': 26.0,
+        'humidity': 35.0,
+        'soil_moisture': 10.0,
+        'light_intensity': 12000.0,
+        'co2_concentration': 420.0,
+        'weather': 'Windy',
+        'equipment': {
+            'heater': False, 'ventilation': False, 'irrigation': False,
+            'co2_injector': False, 'lights': False, 'dehumidifier': False, 'light_blinds': False,
+            }
+        },
+        'sensor_glitch': {
+        'temperature': 0.0,
+        'humidity': 0.0,
+        'soil_moisture': 0.0,
+        'light_intensity': 0.0,
+        'co2_concentration': 2000.0,
+        'weather': 'Clear_sky',
+        'equipment': {
+            'heater': False, 'ventilation': False, 'irrigation': False,
+            'co2_injector': True, 'lights': True, 'dehumidifier': True, 'light_blinds': False,
+            }
+        },
+        'conflict_start': {
+        'temperature': 22.0,
+        'humidity': 65.0,
+        'soil_moisture': 55.0,
+        'light_intensity': 7000.0,
+        'co2_concentration': 450.0,
+        'weather': 'Clear_sky',
+        'equipment': {
+            'heater': True,
+            'ventilation': True,   # conflict
+            'irrigation': False,
+            'co2_injector': True,
+            'lights': True,
+            'dehumidifier': True,
+            'light_blinds': True,  # conflict vs lights
+            }
         }
+
     }
     
     def __init__(self, config_name='optimal'):
@@ -176,6 +254,10 @@ class GreenhouseDataGenerator:
         self.current_soil_moisture = None
         self.current_light_intensity = None
         self.current_co2_concentration = None
+
+                # Last computed targets (for logging/debug)
+        self.last_targets = {}
+
     
     def initialize(self, clear_data=True):
         """Initialize the simulation"""
@@ -207,6 +289,18 @@ class GreenhouseDataGenerator:
         
         return first_reading
     
+    def _compute_targets(self):
+        """Compute all metric targets for the current tick (weather + equipment)."""
+        metrics = [
+            "temperature",
+            "humidity",
+            "soil_moisture",
+            "light_intensity",
+            "co2_concentration",
+        ]
+        return {m: self._calculate_target(m) for m in metrics}
+
+
     def _initialize_equipment(self, equipment_config):
         """Initialize or reset equipment states"""
         for equipment_type, is_active in equipment_config.items():
@@ -221,22 +315,84 @@ class GreenhouseDataGenerator:
                 equipment.is_active = active
                 equipment.save()
     
-    def generate_reading(self):
+    def generate_reading(self, show_targets: bool = False):
         """Generate the next sensor reading"""
         self.tick += 1
-        
-        # Check if weather should change (every 10 ticks = 50 seconds)
-        if self.tick % 10 == 0:
+
+        # Check if weather should change
+        if self.tick % 40 == 0:
             self._change_weather()
-        
-        # Calculate targets and move toward them
-        self._move_toward_targets()
+
+        # NEW: calculate all targets once per tick (and reuse)
+        targets = self._calculate_targets()
+        self.last_targets = targets
+
+        # Move toward targets
+        self._move_toward_targets(targets)
         self._constrain_values()
-        
+
         # Create and return reading
         reading = self._create_reading()
-        
+
+        # OPTIONAL: print targets each tick
+        if show_targets:
+            self._print_tick_debug(reading, targets)
+
         return reading
+
+    # ---------- NEW helpers ----------
+
+    def _calculate_targets(self):
+        """Calculate targets for all metrics based on weather + currently active equipment."""
+        # Start with weather targets
+        targets = dict(self.WEATHER_TARGETS[self.current_weather])
+
+        # Add equipment modifications (query active equipment ONCE)
+        active_equipment = EquipmentState.objects.filter(is_active=True)
+        for equipment in active_equipment:
+            equipment_mod = self.EQUIPMENT_TARGETS.get(equipment.equipment_type, {})
+            for metric, delta in equipment_mod.items():
+                targets[metric] = targets.get(metric, 0) + delta
+
+        return targets
+
+    def _print_tick_debug(self, reading: GreenhouseReading, targets: dict):
+        """Pretty debug output for current values + targets."""
+        print(
+            f"[TARGET |"
+            f"CUR:  T={reading.temperature:5.2f}°C  H={reading.humidity:5.2f}%  "
+            f"S={reading.soil_moisture:5.2f}%  L={reading.light_intensity:7.0f}lx  "
+            f"CO2={reading.co2_concentration:6.0f}ppm | "
+            f"TGT:  T={targets['temperature']:5.2f}°C  H={targets['humidity']:5.2f}%  "
+            f"S={targets['soil_moisture']:5.2f}%  L={targets['light_intensity']:7.0f}lx  "
+            f"CO2={targets['co2_concentration']:6.0f}ppm"
+        )
+
+    # ---------- UPDATED move_toward_targets ----------
+
+    def _move_toward_targets(self, targets: dict):
+        """Move all metrics toward their target values"""
+
+        # Temperature
+        convergence = self.CONVERGENCE_RATES['temperature']
+        self.current_temperature += (targets['temperature'] - self.current_temperature) * convergence
+
+        # Humidity
+        convergence = self.CONVERGENCE_RATES['humidity']
+        self.current_humidity += (targets['humidity'] - self.current_humidity) * convergence
+
+        # Soil Moisture
+        convergence = self.CONVERGENCE_RATES['soil_moisture']
+        self.current_soil_moisture += (targets['soil_moisture'] - self.current_soil_moisture) * convergence
+
+        # Light Intensity
+        convergence = self.CONVERGENCE_RATES['light_intensity']
+        self.current_light_intensity += (targets['light_intensity'] - self.current_light_intensity) * convergence
+
+        # CO2 Concentration
+        convergence = self.CONVERGENCE_RATES['co2_concentration']
+        self.current_co2_concentration += (targets['co2_concentration'] - self.current_co2_concentration) * convergence
+
     
     def _change_weather(self):
         """Change weather based on transition rules"""
@@ -246,45 +402,18 @@ class GreenhouseDataGenerator:
         print(f"[Tick {self.tick}] Weather changed: {self.current_weather} → {new_weather}")
         self.current_weather = new_weather
     
-    def _calculate_target(self, metric):
-        """Calculate the target value for a metric based on weather and equipment"""
-        # Start with weather target
-        target = self.WEATHER_TARGETS[self.current_weather].get(metric, 0)
+    # def _calculate_target(self, metric):
+    #     """Calculate the target value for a metric based on weather and equipment"""
+    #     # Start with weather target
+    #     target = self.WEATHER_TARGETS[self.current_weather].get(metric, 0)
         
-        # Add equipment modifications
-        active_equipment = EquipmentState.objects.filter(is_active=True)
-        for equipment in active_equipment:
-            equipment_mod = self.EQUIPMENT_TARGETS.get(equipment.equipment_type, {})
-            target += equipment_mod.get(metric, 0)
-        
-        return target
+    #     # Add equipment modifications
+    #     active_equipment = EquipmentState.objects.filter(is_active=True)
+    #     for equipment in active_equipment:
+    #         equipment_mod = self.EQUIPMENT_TARGETS.get(equipment.equipment_type, {})
+    #         target += equipment_mod.get(metric, 0)
+    #     return target
     
-    def _move_toward_targets(self):
-        """Move all metrics toward their target values"""
-        # Temperature
-        target_temp = self._calculate_target('temperature')
-        convergence = self.CONVERGENCE_RATES['temperature']
-        self.current_temperature += (target_temp - self.current_temperature) * convergence
-        
-        # Humidity
-        target_humidity = self._calculate_target('humidity')
-        convergence = self.CONVERGENCE_RATES['humidity']
-        self.current_humidity += (target_humidity - self.current_humidity) * convergence
-        
-        # Soil Moisture
-        target_soil = self._calculate_target('soil_moisture')
-        convergence = self.CONVERGENCE_RATES['soil_moisture']
-        self.current_soil_moisture += (target_soil - self.current_soil_moisture) * convergence
-        
-        # Light Intensity
-        target_light = self._calculate_target('light_intensity')
-        convergence = self.CONVERGENCE_RATES['light_intensity']
-        self.current_light_intensity += (target_light - self.current_light_intensity) * convergence
-        
-        # CO2 Concentration
-        target_co2 = self._calculate_target('co2_concentration')
-        convergence = self.CONVERGENCE_RATES['co2_concentration']
-        self.current_co2_concentration += (target_co2 - self.current_co2_concentration) * convergence
     
     def _constrain_values(self):
         """Keep values within realistic bounds"""

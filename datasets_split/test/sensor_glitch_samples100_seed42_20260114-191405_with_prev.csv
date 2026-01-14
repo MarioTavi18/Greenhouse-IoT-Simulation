@@ -1,0 +1,17 @@
+temperature,humidity,soil_moisture,light_intensity,co2_concentration,prev_heater,prev_ventilation,prev_irrigation,prev_co2_injector,prev_lights,prev_dehumidifier,prev_light_blinds,heater,ventilation,irrigation,co2_injector,lights,dehumidifier,light_blinds
+23.4,65.83,53.82,23981.08,444.27,False,False,False,False,True,False,False,False,False,False,True,True,False,False
+21.99,72.02,55.99,20563.63,447.7,False,False,False,False,True,False,False,False,False,False,True,True,False,False
+24.52,59.03,51.19,30220.68,459.78,False,False,False,False,True,False,False,False,False,False,False,True,False,False
+21.64,73.78,56.13,20041.57,460.89,False,False,False,False,True,False,False,False,False,False,False,True,False,False
+24.15,62.51,56.39,29933.19,505.5,False,False,False,True,True,False,False,False,False,False,False,True,False,False
+24.05,58.27,50.48,29375.28,506.05,False,False,False,True,True,False,False,False,False,False,False,True,False,False
+21.16,74.88,56.11,20380.76,504.62,False,False,False,True,True,False,False,False,False,False,False,True,False,False
+23.88,63.56,52.81,26586.29,460.73,False,False,False,False,True,False,False,False,False,False,False,True,False,False
+22.23,70.18,54.42,21786.0,478.71,False,False,False,False,True,False,False,False,False,False,False,True,False,False
+22.7,54.47,46.86,28302.21,559.42,False,False,False,False,True,False,False,False,False,False,False,True,False,False
+8.98,20.61,13.7,14142.2,1396.7,True,False,True,False,True,False,False,True,False,True,False,True,False,False
+10.86,24.77,16.87,16920.81,1268.59,True,False,True,False,True,False,False,True,False,True,False,True,False,False
+22.53,54.23,46.01,27646.67,581.45,False,False,True,False,True,False,False,False,False,False,False,True,False,False
+21.87,72.18,55.02,20825.53,483.13,False,False,False,True,True,False,False,False,False,False,True,True,False,False
+22.51,69.41,54.74,21782.64,495.14,False,False,False,False,True,False,False,False,False,False,False,True,False,False
+23.19,67.17,53.1,24189.27,470.32,False,False,False,True,True,False,False,False,False,False,True,True,False,False

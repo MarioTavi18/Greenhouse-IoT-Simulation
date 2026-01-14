@@ -24,7 +24,7 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             '--interval',
-            type=int,
+            type=float,
             default=5,
             help='Data generation interval in seconds (default: 5)'
         )

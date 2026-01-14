@@ -1,10 +1,9 @@
 from dataclasses import dataclass
-from greenhouse.models import GreenhouseReading, GreenhouseCommand
+from greenhouse.models import GreenhouseReading, GreenhouseCommand, EquipmentState
 
 
 @dataclass
 class GreenhouseThresholds:
-    """Configuration thresholds for the decision tree"""
     # Temperature (Celsius)
     TEMP_MIN: float = 20.0
     TEMP_MAX: float = 25.0
@@ -20,7 +19,7 @@ class GreenhouseThresholds:
     SOIL_BUFFER: float = 5.0
 
     # CO2 (ppm)
-    CO2_MIN: float = 800.0
+    CO2_MIN: float = 450.0
     CO2_BUFFER: float = 50.0
 
     # Light (lux)
@@ -29,144 +28,153 @@ class GreenhouseThresholds:
 
 
 class GreenhouseDecisionModel:
-    """A decision tree model that accepts a predicted GreenhouseReading and returns the optimal GreenhouseCommand"""
+    """
+    Rule-based controller that:
+      - Uses EquipmentState (DB) as the source of truth
+      - Applies hysteresis (buffers)
+      - Resolves cross-effects between equipments (ventilation vs CO2, irrigation vs humidity, lights vs temperature, etc.)
+    """
 
-    def __init__(self, config: GreenhouseThresholds = None):
+    def __init__(self, config: GreenhouseThresholds | None = None):
         self.config = config if config else GreenhouseThresholds()
 
     def decide(self, prediction: GreenhouseReading) -> GreenhouseCommand:
-        """Main entry point for the decision tree"""
+        # ---- Read current equipment state (source of truth) ----
+        equipment_state = {
+            e.equipment_type: e.is_active for e in EquipmentState.objects.all()
+        }
 
-        # Initialize command with all systems OFF
-        command = GreenhouseCommand()
+        # Helper to safely read current state
+        def is_on(name: str) -> bool:
+            return bool(equipment_state.get(name, False))
 
-        # Get the last command from the database
-        last_command = GreenhouseCommand.objects.last()
+        # ---- Start from "keep current state" (good for stability) ----
+        cmd = GreenhouseCommand(
+            heater=is_on("heater"),
+            ventilation=is_on("ventilation"),
+            irrigation=is_on("irrigation"),
+            co2_injector=is_on("co2_injector"),
+            lights=is_on("lights"),
+            dehumidifier=is_on("dehumidifier"),
+            light_blinds=is_on("light_blinds"),
+        )
 
-        # Decision 1: Temperature (Root Node)
-        self._evaluate_temperature(prediction, command, last_command)
-
-        # Decision 2: Humidity
-        # This is evaluated after Temp because Vents affect humidity
-        self._evaluate_humidity(prediction, command, last_command)
-
-        # Decision 3: Soil moisture
-        self._evaluate_soil_moisture(prediction, command)
-
-        # Decision 4: Lighting
-        self._evaluate_light_intensity(prediction, command, last_command)
-
-        # Decision 5: CO2
-        self._evaluate_co2_concentration(prediction, command)
-
-        return command
-
-
-    def _evaluate_temperature(self, prediction: GreenhouseReading, command: GreenhouseCommand, equipment_state: GreenhouseCommand):
-        """Decision Logic for Temperature"""
-
-        # Heater logic
+        # ============================================================
+        # 1) TEMPERATURE CONTROL (safety-ish priority)
+        # ============================================================
+        # Heater: turn on if below min; if on, turn off only above min+buffer
         if prediction.temperature < self.config.TEMP_MIN:
-            command.heater = True
-
-        elif equipment_state and equipment_state.heater:
-            # We are currently heating.
-            # Only stop heating if we are safely above the minimum
-            if prediction.temperature > self.config.TEMP_MIN + self.config.TEMP_BUFFER:
-                command.heater = False
-            else:
-                command.heater = True
-
+            cmd.heater = True
+        elif is_on("heater"):
+            cmd.heater = prediction.temperature <= (self.config.TEMP_MIN + self.config.TEMP_BUFFER)
         else:
-            command.heater = False
+            cmd.heater = False
 
-        # Ventilation logic
+        # Ventilation: turn on if above max; if on, turn off only below max-buffer
         if prediction.temperature > self.config.TEMP_MAX:
-            command.ventilation = True
-
-        elif equipment_state and equipment_state.ventilation:
-            # We are currently venting
-            # Only stop venting if we are safely below the maximum
-            if prediction.temperature < self.config.TEMP_MAX - self.config.TEMP_BUFFER:
-                command.ventilation = False
-            else:
-                command.ventilation = True
-
+            cmd.ventilation = True
+        elif is_on("ventilation"):
+            cmd.ventilation = prediction.temperature >= (self.config.TEMP_MAX - self.config.TEMP_BUFFER)
         else:
-            command.ventilation = False
+            cmd.ventilation = False
 
+        # Conflict: don't heat and ventilate at the same time (wastes energy)
+        # If both would be True, prefer ventilation when overheating, else heater.
+        if cmd.heater and cmd.ventilation:
+            if prediction.temperature > self.config.TEMP_MAX:
+                cmd.heater = False
+            else:
+                cmd.ventilation = False
 
-    def _evaluate_humidity(self, prediction: GreenhouseReading, command: GreenhouseCommand, equipment_state: GreenhouseCommand):
-        """Decision Logic for Humidity"""
+        # ============================================================
+        # 2) LIGHT CONTROL (depends on temperature)
+        # ============================================================
+        # Too bright -> use blinds
+        if prediction.light_intensity > self.config.LIGHT_MAX_STRESS:
+            cmd.light_blinds = True
+            cmd.lights = False  # don't add more light
 
+        # Too dark -> use lights, but avoid if we're overheating
+        elif prediction.light_intensity < self.config.LIGHT_MIN_GROWTH:
+            cmd.light_blinds = False
+            # If near/above max temp, don't force lights (they add heat in your generator)
+            if prediction.temperature >= (self.config.TEMP_MAX - 0.5):
+                cmd.lights = False
+            else:
+                cmd.lights = True
+
+        # Optimal band -> keep current (already initialized)
+        else:
+            cmd.lights = is_on("lights")
+            cmd.light_blinds = is_on("light_blinds")
+
+        # ============================================================
+        # 3) HUMIDITY CONTROL (ventilation affects humidity)
+        # ============================================================
+        # If humidity too high:
+        #   - Prefer ventilation if it won't cause under-temp
+        #   - Else use dehumidifier
         if prediction.humidity > self.config.HUM_MAX:
-            # High Humidity
-            # If ventilation is already on for temperature,it helps with humidity too
-            if not command.ventilation:
-                # If ventilation is off, we use the dehumidifier to avoid losing heat
-                command.dehumidifier = True
-
-        elif prediction.humidity < self.config.HUM_MIN:
-            # Low Humidity
-            command.dehumidifier = False
-
-        elif equipment_state and equipment_state.dehumidifier:
-            # Only stop the dehumidifier if the humidity is safely below the maximum
-            if prediction.humidity < self.config.HUM_MAX - self.config.HUM_BUFFER:
-                command.dehumidifier = False
+            if prediction.temperature > (self.config.TEMP_MIN + 0.5):
+                cmd.ventilation = True
+                cmd.dehumidifier = False
             else:
-                command.dehumidifier = True
+                cmd.dehumidifier = True
 
+        # If humidity too low: dehumidifier off
+        elif prediction.humidity < self.config.HUM_MIN:
+            cmd.dehumidifier = False
+
+        # Hysteresis for dehumidifier if currently on
+        elif is_on("dehumidifier"):
+            # keep it on until safely below HUM_MAX - buffer
+            cmd.dehumidifier = prediction.humidity >= (self.config.HUM_MAX - self.config.HUM_BUFFER)
         else:
-            command.dehumidifier = False
+            cmd.dehumidifier = False
 
-
-    def _evaluate_soil_moisture(self, prediction: GreenhouseReading, command: GreenhouseCommand, equipment_state: GreenhouseCommand):
-        """Decision Logic for Soil Moisture"""
-
+        # ============================================================
+        # 4) SOIL MOISTURE CONTROL (irrigation increases humidity in your generator)
+        # ============================================================
+        # If soil is too dry -> irrigate, unless humidity already too high
         if prediction.soil_moisture < self.config.SOIL_MIN:
-            command.irrigation = True
+            if prediction.humidity > (self.config.HUM_MAX - 2.0):
+                cmd.irrigation = False
+            else:
+                cmd.irrigation = True
 
-        elif equipment_state and equipment_state.irrigation:
-            # Only stop irrigation if the soil moisture is safely above the minimum
-            if prediction.soil_moisture > self.config.SOIL_MIN + self.config.SOIL_BUFFER:
-                command.irrigation = False
-
+        # Hysteresis if currently irrigating: stop only above SOIL_MIN + buffer
+        elif is_on("irrigation"):
+            cmd.irrigation = prediction.soil_moisture <= (self.config.SOIL_MIN + self.config.SOIL_BUFFER)
         else:
-            command.irrigation = False
+            cmd.irrigation = False
 
-
-    def _evaluate_light_intensity(self, prediction: GreenhouseReading, command: GreenhouseCommand, equipment_state: GreenhouseCommand):
-        """Decision Logic for Lighting"""
-
-        if prediction.light_intensity < self.config.LIGHT_MIN_GROWTH:
-            # Too dark
-            command.light_blinds = False
-            if equipment_state and not equipment_state.light_blinds:
-                command.lights = True
-
-        elif prediction.light_intensity > self.config.LIGHT_MAX_STRESS:
-            # Too bright
-            command.lights = False
-            if equipment_state and not equipment_state.lights:
-                command.light_blinds = True
-
+        # ============================================================
+        # 5) CO2 CONTROL (ventilation lowers CO2 in your generator)
+        # ============================================================
+        # If ventilation is on, don't inject CO2 (otherwise you're "fighting yourself").
+        if cmd.ventilation:
+            cmd.co2_injector = False
         else:
-            # Optimal light
-            command.lights = equipment_state.lights
-            command.light_blinds = equipment_state.light_blinds
+            # Turn on if below min; if on, turn off only above min+buffer
+            if prediction.co2_concentration < self.config.CO2_MIN:
+                cmd.co2_injector = True
+            elif is_on("co2_injector"):
+                cmd.co2_injector = prediction.co2_concentration <= (self.config.CO2_MIN + self.config.CO2_BUFFER)
+            else:
+                cmd.co2_injector = False
 
+        # ============================================================
+        # FINAL CONFLICT RESOLUTION PASS (small but important)
+        # ============================================================
+        # If we’re ventilating to cool/dry, avoid adding heat sources if not necessary.
+        if cmd.ventilation and prediction.temperature >= self.config.TEMP_MAX:
+            cmd.lights = False  # lights add heat in your generator
+            # dehumidifier generally unnecessary if ventilation is already running
+            cmd.dehumidifier = False
 
-    def _evaluate_co2_concentration(self, prediction: GreenhouseReading, command: GreenhouseCommand, equipment_state: GreenhouseCommand):
-        """Decision Logic for CO2"""
+        # If we’re heating because it's cold, avoid ventilation unless humidity is dangerously high.
+        if cmd.heater and prediction.temperature <= self.config.TEMP_MIN:
+            if prediction.humidity <= (self.config.HUM_MAX + 5.0):
+                cmd.ventilation = False
 
-        if prediction.co2_concentration < self.config.CO2_MIN:
-            command.co2_injector = True
-
-        elif equipment_state and equipment_state.co2_injector:
-            # Only stop the CO2 injector if the CO2 concentration is safely above the minimum
-            if prediction.co2_concentration > self.config.CO2_MIN + self.config.CO2_BUFFER:
-                command.co2_injector = False
-
-        else:
-            command.co2_injector = False
+        return cmd
